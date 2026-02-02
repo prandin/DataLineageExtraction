@@ -1,33 +1,79 @@
-import sqlglot
-from sqlglot import exp
+import re
+from collections import OrderedDict
 
-def extract_view_metadata(sql_code):
-    parsed = sqlglot.parse_one(sql_code, read="oracle")
+def extract_view_metadata(sql_text: str):
+    """
+    Extracts:
+    1. View name
+    2. Ordered column dictionary {1: col1, 2: col2, ...}
+    3. SELECT statement following AS (verbatim)
+    """
 
-    # --- Find CREATE node anywhere in the tree ---
-    create_node = parsed.find(exp.Create)
-    if not create_node:
-        raise ValueError("No CREATE VIEW statement found.")
+    # Normalize line endings but preserve content
+    sql = sql_text.strip()
 
-    # --- 1. Extract View Name and Columns ---
-    target = create_node.this
+    # -----------------------------
+    # 1. Extract VIEW name
+    # -----------------------------
+    view_name_match = re.search(
+        r"""
+        CREATE\s+(?:OR\s+REPLACE\s+)?      # CREATE OR REPLACE
+        FORCE\s+VIEW\s+                   # FORCE VIEW
+        ([A-Za-z0-9_.]+)                  # schema.view_name
+        """,
+        sql,
+        re.IGNORECASE | re.VERBOSE
+    )
 
-    if isinstance(target, exp.Schema):
-        # VIEW name (col1, col2, ...)
-        view_name = target.this.sql()
-        col_list = [c.name for c in target.expressions]
-    else:
-        view_name = target.sql()
-        col_list = []
+    if not view_name_match:
+        raise ValueError("View name not found")
 
-    column_dict = {i + 1: col for i, col in enumerate(col_list)}
+    view_name = view_name_match.group(1)
 
-    # --- 2. Extract SELECT statement ---
-    # Everything after AS
-    select_stmt = create_node.expression
-    if not select_stmt:
-        raise ValueError("CREATE VIEW has no AS SELECT clause.")
+    # -----------------------------
+    # 2. Extract column list
+    # -----------------------------
+    column_block_match = re.search(
+        r"""
+        VIEW\s+[A-Za-z0-9_.]+\s*
+        \(
+            ([^)]*)
+        \)
+        """,
+        sql,
+        re.IGNORECASE | re.VERBOSE | re.DOTALL
+    )
 
-    select_sql = select_stmt.sql()
+    if not column_block_match:
+        raise ValueError("Column list not found")
 
-    return view_name, column_dict, select_sql
+    column_block = column_block_match.group(1)
+
+    columns = [
+        col.strip()
+        for col in column_block.split(",")
+        if col.strip()
+    ]
+
+    column_dict = OrderedDict(
+        (i + 1, col) for i, col in enumerate(columns)
+    )
+
+    # -----------------------------
+    # 3. Extract SELECT after AS
+    # -----------------------------
+    as_match = re.search(
+        r"""
+        \bAS\b
+        (.*)$
+        """,
+        sql,
+        re.IGNORECASE | re.DOTALL | re.VERBOSE
+    )
+
+    if not as_match:
+        raise ValueError("AS SELECT clause not found")
+
+    select_statement = as_match.group(1).strip()
+
+    return view_name, column_dict, select_statement
