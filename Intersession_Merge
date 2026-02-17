@@ -1,0 +1,122 @@
+def intersession_merger(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Merges data lineage rows across different sessions, correctly handling
+    both linear chains and branching (fan-in/fan-out) scenarios.
+    """
+    if df.empty:
+        return df.copy()
+
+    HOP_PREFIXES = [
+        'TGT_SCHEMA.TABLE', 'TGT_COLUMN', 'TGT_DATA_TYPE',
+        'SRC_TGT_TRANSFORMATION', 'SRC_SCHEMA.TABLE', 'SRC_COLUMN',
+        'SRC_DATA_TYPE', 'SET_CODE', 'SESSION_NAME'
+    ]
+
+    def _parse_row(row: pd.Series, row_id: int) -> dict:
+        """Parses a DataFrame row into a structured dictionary object."""
+        base_data = {
+            'FINAL_ATTRIBUTE': row.get('FINAL_ATTRIBUTE'),
+            'ACTUAL_SOURCE': row.get('ACTUAL_SOURCE'),
+            'SESSION_NAME': row.get('SESSION_NAME')
+        }
+        hops = []
+        i = 1
+        while True:
+            col_to_check = f'TGT_SCHEMA.TABLE_{i}'
+            if col_to_check in row and pd.notna(row[col_to_check]):
+                hop_data = {p: row.get(f'{p}_{i}') for p in HOP_PREFIXES}
+                hops.append(hop_data)
+                i += 1
+            else:
+                break
+        return {'id': row_id, 'data': {'base': base_data, 'hops': hops}}
+
+    def _reconstruct_df(lineage_objs: list) -> pd.DataFrame:
+        """Reconstructs a DataFrame from a list of lineage objects."""
+        if not lineage_objs:
+            base_cols = ['FINAL_ATTRIBUTE', 'ACTUAL_SOURCE', 'SESSION_NAME']
+            return pd.DataFrame(columns=base_cols)
+
+        flat_records = []
+        max_hops = max((len(obj['data']['hops']) for obj in lineage_objs), default=0)
+
+        for obj in lineage_objs:
+            record = obj['data']['base'].copy()
+            for i, hop in enumerate(obj['data']['hops']):
+                for prefix in HOP_PREFIXES:
+                    record[f"{prefix}_{i+1}"] = hop.get(prefix)
+            flat_records.append(record)
+        
+        final_cols = ['FINAL_ATTRIBUTE', 'ACTUAL_SOURCE', 'SESSION_NAME']
+        for i in range(1, max_hops + 1):
+            for prefix in HOP_PREFIXES:
+                final_cols.append(f"{prefix}_{i}")
+        
+        return pd.DataFrame.from_records(flat_records).reindex(columns=final_cols)
+
+    # 1. Initial Parsing
+    records = [_parse_row(row, i) for i, row in df.iterrows()]
+    
+    # 2. Iterative Merging Loop
+    while True:
+        possible_merges = []
+        
+        final_map = {}
+        for rec in records:
+            final_attr = rec['data']['base']['FINAL_ATTRIBUTE']
+            final_map.setdefault(final_attr, []).append(rec)
+
+        for downstream_rec in records:
+            source = downstream_rec['data']['base']['ACTUAL_SOURCE']
+            potential_upstreams = final_map.get(source, [])
+
+            for upstream_rec in potential_upstreams:
+                if upstream_rec['id'] != downstream_rec['id'] and upstream_rec['data']['base']['SESSION_NAME'] != downstream_rec['data']['base']['SESSION_NAME']:
+                    possible_merges.append({'up': upstream_rec, 'down': downstream_rec})
+        
+        if not possible_merges:
+            break
+
+        downstream_ids_in_pass = {merge['down']['id'] for merge in possible_merges}
+
+        merges_to_execute = [
+            merge for merge in possible_merges 
+            if merge['up']['id'] not in downstream_ids_in_pass
+        ]
+
+        if not merges_to_execute:
+             break
+
+        merges_by_downstream = {}
+        for merge in merges_to_execute:
+            down_id = merge['down']['id']
+            if down_id not in merges_by_downstream:
+                merges_by_downstream[down_id] = {'down_rec': merge['down'], 'up_recs': []}
+            merges_by_downstream[down_id]['up_recs'].append(merge['up'])
+
+        consumed_ids = set()
+        newly_merged_records = []
+        for down_id, merge_group in merges_by_downstream.items():
+            downstream_rec = merge_group['down_rec']
+            consumed_ids.add(downstream_rec['id'])
+            for upstream_rec in merge_group['up_recs']:
+                consumed_ids.add(upstream_rec['id'])
+                
+                new_base = {
+                    'FINAL_ATTRIBUTE': downstream_rec['data']['base']['FINAL_ATTRIBUTE'],
+                    'ACTUAL_SOURCE': upstream_rec['data']['base']['ACTUAL_SOURCE'],
+                    'SESSION_NAME': upstream_rec['data']['base']['SESSION_NAME']
+                }
+                
+                # *** BUG FIX IS HERE ***
+                # The order of hop concatenation is reversed to match the "append" requirement.
+                new_hops = copy.deepcopy(downstream_rec['data']['hops']) + copy.deepcopy(upstream_rec['data']['hops'])
+                
+                new_id = f"merged_{upstream_rec['id']}_{downstream_rec['id']}"
+                newly_merged_records.append({'id': new_id, 'data': {'base': new_base, 'hops': new_hops}})
+
+        surviving_records = [rec for rec in records if rec['id'] not in consumed_ids]
+        records = surviving_records + newly_merged_records
+
+    # 3. Reconstruct final DataFrame
+    return _reconstruct_df(records)
