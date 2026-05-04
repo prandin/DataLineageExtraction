@@ -1,0 +1,84 @@
+import sqlglot
+
+def get_parent_node(df_dict, transformation_list, source_list, decomposed_src_list):
+
+    # ---------- Helper: canonical SQL ----------
+    def canonical(expr):
+        try:
+            return str(sqlglot.parse_one(expr, dialect="oracle"))
+        except Exception:
+            return str(expr).strip().upper()
+
+    n = len(df_dict["target_column"])
+
+    # ---------- Step 1: assign node numbers ----------
+    for i in range(n):
+        df_dict["node_number"][i] = n - i
+
+    # ---------- Step 2: normalize transformations ----------
+    df_dict["transformation"] = [str(x).strip().upper() for x in df_dict["transformation"]]
+
+    # ---------- Step 3: precompute canonical forms ----------
+    canon_list = [canonical(x) for x in df_dict["transformation"]]
+
+    # ---------- Step 4: initialise parent nodes ----------
+    df_dict["parent_node"] = ["output"] * n
+
+    # ---------- Step 5: build transformation_dict (same purpose as before) ----------
+    transformation_dict = {}
+
+    # ---------- Step 6: main lineage assignment ----------
+    for k in range(n):
+        tli_k = df_dict["transformation_list_index"][k]
+        ck = canon_list[k]
+
+        best_i = None
+        best_tli = -1
+
+        for i in range(n):
+            if i == k:
+                continue
+
+            # syntactic equality check
+            if canon_list[i] != ck:
+                continue
+
+            tli_i = df_dict["transformation_list_index"][i]
+
+            # must be earlier in transformation order
+            if tli_i < tli_k:
+                if tli_i > best_tli:
+                    best_tli = tli_i
+                    best_i = i
+
+        # assign best parent if found
+        if best_i is not None:
+            df_dict["parent_node"][k] = df_dict["node_number"][best_i]
+
+            # propagate metadata (same as your original logic)
+            df_dict["column_name_or_alias"][k] = df_dict["column_name_or_alias"][best_i]
+            df_dict["table"][k] = df_dict["table"][best_i]
+
+            # store mapping for fallback phase
+            transformation_dict[df_dict["transformation_list_index"][k]] = [
+                df_dict["node_number"][best_i],
+                df_dict["column_name_or_alias"][best_i],
+                df_dict["table"][best_i]
+            ]
+
+    # ---------- Step 7: fallback assignment (unchanged logic) ----------
+    for i in range(n):
+        if df_dict["parent_node"][i] == "output" and \
+           df_dict["transformation_list_index"][i] in transformation_dict:
+
+            list_of_data = transformation_dict[df_dict["transformation_list_index"][i]]
+            df_dict["parent_node"][i] = list_of_data[0]
+            df_dict["column_name_or_alias"][i] = list_of_data[1]
+            df_dict["table"][i] = list_of_data[2]
+
+    # ---------- Step 8: final cleanup ----------
+    for i in range(n):
+        if str(df_dict["column_name_or_alias"][i]).strip() == "":
+            df_dict["column_name_or_alias"][i] = df_dict["TGT_column"][i]
+
+    return df_dict
