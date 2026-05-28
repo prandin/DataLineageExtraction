@@ -1,0 +1,206 @@
+cffi==1.17.1
+colorama==0.4.6
+cryptography==44.0.1
+cx-Oracle==8.3.0
+et_xmlfile==2.0.0
+lark==1.2.2
+numpy==2.1.3
+openpyxl==3.1.5
+oracledb==2.5.1
+pandas==2.3.2
+pyarrow==21.0.0
+pycparser==2.22
+python-dateutil==2.9.0.post0
+pytz==2024.2
+PyYAML==6.0.2
+six==1.16.0
+sqlglot==26.6.0
+sqlparse==0.5.2
+tqdm==4.67.0
+tzdata==2024.2
+XlsxWriter==3.2.3
+
+# 1. Stored Procedure Code Documentation
+
+## 1.1 Purpose and Scope of the System
+
+The scope of the program is to parse multiple Stored Procedure queries and the lineage of each column being set.
+
+---
+
+# 1.2 Setup, Dependencies, and Usage Guidelines
+
+## 1.2.1 Inputs
+
+The program takes three inputs:
+
+- The input folder path — where the input stored procedure queries are stored in separate `.sql` files.
+- The output folder path — where the `.csv` output files need to be stored.
+- The `ddl.json` file path that stores the DDL metadata structure of all the tables in the database in a JSON format.
+
+---
+
+## 1.2.2 Steps to Setup and Run
+
+### To set up the environment:
+
+- Inside the project directory, open CMD and create a new virtual environment:
+
+```bash
+python -m venv venv
+```
+
+- Activate the virtual environment:
+
+```bash
+venv\Scripts\activate
+```
+
+- Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+### To run the script/program:
+
+- Have both `stored_procedure_lineage.py` and `parsing_declare.py` files in the same parent/project folder.
+- Update the `ddl.json` file path inside `stored_procedure_lineage.py`.
+- Run the `stored_procedure_lineage.py` script.
+- The prompt to enter the input and output folder paths will be shown. Enter them.
+
+---
+
+# 1.3 Code Structure
+
+## 1.3.1 File Organization
+
+| File/Folder | Description |
+|---|---|
+| ddl.json | The JSON file that has DDL structure of the database tables along with the datatype details. |
+| Inputs | Input folder where input stored procedure files are stored as `.sql` extension. |
+| Outputs | Output folder where the CSV outputs will be stored. |
+
+---
+
+## 1.3.2 Key Modules
+
+| Module | Description |
+|---|---|
+| stored_procedure.py | Script file to be run. |
+| parsing_declare.py | To be stored in the same folder. |
+
+---
+
+## 1.3.3 Individual Sections on Each Key Module
+
+| Module | Description |
+|---|---|
+| stored_procedure_lineage.py | Goes through the input folder given at runtime and parses each SQL file one-by-one and creates CSV files and merges them on `DST_NAME` field to get a single output CSV file for each DST. |
+
+### Functions/modules inside `stored_procedure_lineage.py`
+
+| Functions/modules | Description |
+|---|---|
+| update_handling_code() | Manages the GLOVERRIDE and LINEMAPPING queries, along with miscellaneous UPDATE-SET queries |
+| merge_handling_code() | Manages the LINEOVERRIDE queries which starts with MERGE keyword |
+| Combining logic | Manages the merging of multiple SP csv outputs to create a single output for each DST |
+
+---
+
+| Module | Description |
+|---|---|
+| parsing_declare.py | Has function definitions for parsing the specifically structured PL/SQL files and functions. |
+
+---
+
+# 1.4 Maintenance and Support
+
+| Issues | Troubleshooting Method |
+|---|---|
+| ‘UPDATE’/‘MERGE’ Keyword not found | Ensure that the file has either starting with INSERT, UPDATE, or MERGE keywords. |
+| Permission denied for a file | Check if the script is run with sufficient privileges or ensure that the file in question is not open elsewhere. |
+| Setcode Updated with an empty set code | Warning: There might not be a setcode mentioned in the code. For example, LOOKUP tables. |
+
+---
+
+# 1.5 Code Flow
+
+```text
+                         +---------------------------+
+                         | Stored Procedure Queries |
+                         +---------------------------+
+                                      |
+                 -----------------------------------------
+                 |                    |                  |
+              PL/SQL             LINEMAPPING         GLOVERRIDE
+                 |                    |                  |
+                 v                    v                  v
+        +----------------+   +-------------------+   +----------------------+
+        | _parsing_      |   | merge_handling_  |   | update_handling_     |
+        | declare.py     |   | code()           |   | code()               |
+        +----------------+   +-------------------+   +----------------------+
+                 |                    |                  |
+                 |------ csv ---------|------ csv -------|
+                                      |
+                                      v
+                         +----------------------+
+                         |   Combining Logic    |
+                         +----------------------+
+                                      |
+                                      v
+                              +--------------+
+                              |  Output csv  |
+                              +--------------+
+```
+
+---
+
+# 1.6 Sample Inputs and Outputs
+
+## 1.6.1 Input type 1 — SP queries with MERGE functionality
+
+(Screenshot example shown in original document)
+
+---
+
+## 1.6.2 Input type 2 — PL/SQL queries with structure shown below
+
+(Screenshot example shown in original document)
+
+---
+
+## 1.6.3 Input type 3 — One-or-more UPDATE-SET statements in a single file
+
+(Screenshot example shown in original document)
+
+---
+
+## 1.6.4 Output Structure
+
+There are seventeen outputs for stored procedure output:
+
+| COLUMN NAMES | DESCRIPTION |
+|---|---|
+| FINAL_TARGET | Specifies which target-table-column is being computed |
+| NODE_NUMBER | Used for keeping track of the hops of transformation. Each FINAL_TARGET value starts with NODE_NUMBER - 1 |
+| CHILD_NODE | Used for keeping track of the transformations containing columns that are created dynamically. |
+| HAS_CHILD | Flag set to identify if CHILD_NODE is present or not |
+| SOURCE_SCHEMA | Schema name of source used in the transformation |
+| SRC_TABLE | Table name of source used in the transformation |
+| SRC_COLUMN | Column name of source used in the transformation |
+| SRC_DATA_TYPE | Data type of SRC_COLUMN |
+| SRC_TGT_TRANSFORMATION | The transformation/query snippet from the stored procedure query that gives the source and target connections. |
+| TGT_TABLE | Table name of target being set/created |
+| TGT_COLUMN | Column name of target being set/created |
+| TGT_DATA_TYPE | Data type of TGT_COLUMN |
+| LINEAGE_SRC | Set to ‘SP’ for stored procedure outputs, used for merging SQL, XML and SP later |
+
+---
+
+| COLUMN NAMES | DESCRIPTION |
+|---|---|
+| FILE_NAME | File name of the query being parsed |
+| DST_NAME | FINAL_TARGET’s table name |
+| SET_CODE | The specific set code for which the mentioned file was run. |
+| SESSION_NAME | The session from which the query is extracted |
